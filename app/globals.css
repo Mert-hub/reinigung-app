@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+:root {
+  /* Umut Hotelservice: white / clean surfaces, black text, signature green accents */
+  --background: #f4f7f4;
+  --foreground: #0a0a0a;
+  --brand: #44d62c;
+  --brand-hover: #3ab525;
+  --brand-foreground: #ffffff;
+  --brand-muted: #e8f6e3;
+  --surface: #ffffff;
+  --border-subtle: #e5e7eb;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
+  --color-surface: var(--surface);
+  /* Named `line` so utilities read naturally: border-line */
+  --color-line: var(--border-subtle);
+  --font-sans: var(--font-inter);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+}
