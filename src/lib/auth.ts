@@ -52,6 +52,11 @@ export async function getUserProfile(userId: string): Promise<UserContext> {
 
   if (error) {
     console.error("Profil rol bilgisi alinamadi", { details: error.message, userId });
+    throw new Error(`Profile read failed: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error("Profile not found for current user.");
   }
 
   const role: AppRole =

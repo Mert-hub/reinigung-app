@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { getCurrentUser, getUserProfile, type AppRole } from "@/src/lib/auth";
 import { getSupabaseClient } from "@/src/lib/supabase";
 import { formatSupabaseError } from "@/src/lib/supabase-errors";
+import { getHotelCatalogIds } from "@/src/lib/hotel-catalog";
 
 const STORAGE_KEY = "reinigung.adminSelectedHotelId";
 
@@ -24,6 +25,9 @@ const HotelScopeContext = createContext<HotelScopeValue | null>(null);
 async function loadDistinctHotelIds(): Promise<string[]> {
   const supabase = getSupabaseClient();
   const out = new Set<string>();
+  for (const hotelId of getHotelCatalogIds()) {
+    out.add(hotelId);
+  }
 
   const addFrom = (rows: { hotel_id: string | null }[] | null) => {
     for (const row of rows ?? []) {

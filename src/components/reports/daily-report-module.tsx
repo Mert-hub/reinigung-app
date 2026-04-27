@@ -7,10 +7,10 @@ import { de, enUS, tr, uk } from "date-fns/locale";
 import { CalendarDays, Camera, CheckCircle2, ChevronLeft, ChevronRight, PackageSearch, Wrench, X } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { useHotelScope } from "@/src/contexts/hotel-scope-context";
-import { TagChipsField } from "@/src/components/labels/tag-chips-field";
 import { useI18n } from "@/src/i18n/provider";
 import { getSupabaseClient } from "@/src/lib/supabase";
 import { formatSupabaseError } from "@/src/lib/supabase-errors";
+import { getHotelDisplayName } from "@/src/lib/hotel-catalog";
 
 const REPORT_PHOTOS_BUCKET =
   process.env.NEXT_PUBLIC_SUPABASE_REPORTS_BUCKET ?? "room-list";
@@ -23,6 +23,8 @@ type DailyReport = {
   photo_url: string | null;
   checker_count: number | null;
   cleaner_count: number | null;
+  public_count: number | null;
+  spuler_count: number | null;
 };
 
 function getErrorDetails(error: unknown) {
@@ -86,11 +88,12 @@ export function DailyReportModule() {
   const { effectiveHotelId, isAdmin, hotelOptions, isLoading: scopeLoading, setSelectedHotelId, selectedHotelId } =
     useHotelScope();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [reportTags, setReportTags] = useState<string[]>([]);
   const [abreise, setAbreise] = useState("");
   const [bleibe, setBleibe] = useState("");
   const [checkerCount, setCheckerCount] = useState("");
   const [cleanerCount, setCleanerCount] = useState("");
+  const [publicCount, setPublicCount] = useState("");
+  const [spulerCount, setSpulerCount] = useState("");
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [pendingPreviews, setPendingPreviews] = useState<string[]>([]);
@@ -104,29 +107,13 @@ export function DailyReportModule() {
   const reportTitle = `${format(selectedDate, "d MMMM yyyy", { locale: calendarLocale })} - ${t("reports.reportDateTitle")}`;
 
   const currentHotelId = effectiveHotelId;
-  const currentHotel = effectiveHotelId ?? t("layout.hotelMissing");
+  const currentHotel = effectiveHotelId ? getHotelDisplayName(effectiveHotelId) : t("layout.hotelMissing");
   const filePickerLabel =
     photoFiles.length === 0
       ? t("reports.chooseFile")
       : photoFiles.length === 1
         ? photoFiles[0].name
         : t("reports.nFilesSelected").replace("{{n}}", String(photoFiles.length));
-
-  useEffect(() => {
-    void Promise.resolve().then(() => {
-      if (!effectiveHotelId) {
-        setReportTags([]);
-        return;
-      }
-      const key = `reinigung.reportTags.v1.${effectiveHotelId}.${format(selectedDate, "yyyy-MM-dd")}`;
-      try {
-        const raw = window.localStorage.getItem(key);
-        setReportTags(raw ? (JSON.parse(raw) as string[]) : []);
-      } catch {
-        setReportTags([]);
-      }
-    });
-  }, [effectiveHotelId, selectedDate]);
 
   useEffect(() => {
     const urls = photoFiles.map((f) => URL.createObjectURL(f));
@@ -201,7 +188,7 @@ export function DailyReportModule() {
 
       const query = supabase
         .from("daily_reports")
-        .select("id, created_at, hotel_id, abreise_count, bleibe_count, photo_url, checker_count, cleaner_count")
+        .select("id, created_at, hotel_id, abreise_count, bleibe_count, photo_url, checker_count, cleaner_count, public_count, spuler_count")
         .eq("hotel_id", currentHotelId)
         .gte("created_at", startOfDay.toISOString())
         .lt("created_at", nextDay.toISOString())
@@ -223,12 +210,16 @@ export function DailyReportModule() {
         setBleibe(String(data.bleibe_count ?? ""));
         setCheckerCount(String(data.checker_count ?? ""));
         setCleanerCount(String(data.cleaner_count ?? ""));
+        setPublicCount(String(data.public_count ?? ""));
+        setSpulerCount(String(data.spuler_count ?? ""));
       } else {
         setLastEntry(null);
         setAbreise("");
         setBleibe("");
         setCheckerCount("");
         setCleanerCount("");
+        setPublicCount("");
+        setSpulerCount("");
       }
 
       setIsLoadingLastEntry(false);
@@ -287,6 +278,8 @@ export function DailyReportModule() {
         bleibe_count: Number(bleibe),
         checker_count: Number(checkerCount || 0),
         cleaner_count: Number(cleanerCount || 0),
+        public_count: Number(publicCount || 0),
+        spuler_count: Number(spulerCount || 0),
         photo_url: photoUrlSerialized,
         created_at: lastEntry?.created_at ?? new Date(selectedDate).toISOString(),
       };
@@ -300,6 +293,8 @@ export function DailyReportModule() {
             bleibe_count: basePayload.bleibe_count,
             checker_count: basePayload.checker_count,
             cleaner_count: basePayload.cleaner_count,
+            public_count: basePayload.public_count,
+            spuler_count: basePayload.spuler_count,
             photo_url: basePayload.photo_url,
           })
           .eq("id", lastEntry.id);
@@ -313,15 +308,6 @@ export function DailyReportModule() {
         throw insertError;
       }
 
-      if (currentHotelId) {
-        const key = `reinigung.reportTags.v1.${currentHotelId}.${format(selectedDate, "yyyy-MM-dd")}`;
-        try {
-          window.localStorage.setItem(key, JSON.stringify(reportTags));
-        } catch {
-          // ignore
-        }
-      }
-
       setLastEntry({
         id: lastEntry?.id ?? crypto.randomUUID(),
         created_at: basePayload.created_at,
@@ -330,6 +316,8 @@ export function DailyReportModule() {
         bleibe_count: Number(bleibe),
         checker_count: Number(checkerCount || 0),
         cleaner_count: Number(cleanerCount || 0),
+        public_count: Number(publicCount || 0),
+        spuler_count: Number(spulerCount || 0),
         photo_url: photoUrlSerialized || null,
       });
       setSuccessMessage(t("reports.reportSaved"));
@@ -354,23 +342,23 @@ export function DailyReportModule() {
           {t("reports.subtitle")}
         </p>
         {isAdmin && !scopeLoading && (
-          <div className="mt-3 max-w-sm">
-            <label className="mb-1 block text-sm font-medium text-[#344054]">{t("admin.selectHotel")}</label>
-            <select
-              value={selectedHotelId}
-              onChange={(event) => setSelectedHotelId(event.target.value)}
-              className="h-10 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
-            >
-              {hotelOptions.length === 0 ? (
-                <option value="">{t("layout.noHotelsInDb")}</option>
-              ) : (
-                hotelOptions.map((h) => (
-                  <option key={h} value={h}>
-                    {h}
-                  </option>
-                ))
-              )}
-            </select>
+            <div className="mt-3 max-w-xl">
+              <label className="mb-1 block text-sm font-medium text-[#344054]">{t("admin.selectHotel")}</label>
+              <select
+                value={selectedHotelId}
+                onChange={(event) => setSelectedHotelId(event.target.value)}
+                className="h-10 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
+              >
+                {hotelOptions.length === 0 ? (
+                  <option value="">{t("layout.noHotelsInDb")}</option>
+                ) : (
+                  hotelOptions.map((h) => (
+                    <option key={h} value={h} title={h}>
+                      {getHotelDisplayName(h)}
+                    </option>
+                  ))
+                )}
+              </select>
             <p className="mt-1 text-xs text-[#667085]">{t("reports.adminHotelNote")}</p>
           </div>
         )}
@@ -411,12 +399,6 @@ export function DailyReportModule() {
         <form onSubmit={handleSubmit} className="rounded-xl border border-[#d0d5dd] bg-white p-5">
           <h2 className="text-lg font-semibold text-[#101828]">{t("reports.reportInput")}</h2>
           <p className="mt-1 text-sm text-[#667085]">{reportTitle}</p>
-          {currentHotelId && (
-            <div className="mt-3 max-w-2xl">
-              <p className="text-sm font-medium text-[#344054]">{t("reports.tagsTitle")}</p>
-              <TagChipsField value={reportTags} onChange={setReportTags} className="mt-1" />
-            </div>
-          )}
 
           <div className="mt-5 space-y-4">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -470,6 +452,32 @@ export function DailyReportModule() {
                   placeholder="0"
                   value={cleanerCount}
                   onChange={(event) => setCleanerCount(event.target.value)}
+                  className="h-11 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-sm font-medium text-[#344054]">{t("reports.publicCount")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={publicCount}
+                  onChange={(event) => setPublicCount(event.target.value)}
+                  className="h-11 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-sm font-medium text-[#344054]">{t("reports.spulerCount")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={spulerCount}
+                  onChange={(event) => setSpulerCount(event.target.value)}
                   className="h-11 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
                 />
               </label>
@@ -570,6 +578,16 @@ export function DailyReportModule() {
                   <div className="rounded-md border border-[#d0d5dd] bg-[#f8fafc] p-3">
                     <p className="text-xs text-[#667085]">{t("reports.cleanerCount")}</p>
                     <p className="text-2xl font-semibold text-brand">{lastEntry.cleaner_count ?? 0}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border border-[#d0d5dd] bg-[#f8fafc] p-3">
+                    <p className="text-xs text-[#667085]">{t("reports.publicCount")}</p>
+                    <p className="text-2xl font-semibold text-brand">{lastEntry.public_count ?? 0}</p>
+                  </div>
+                  <div className="rounded-md border border-[#d0d5dd] bg-[#f8fafc] p-3">
+                    <p className="text-xs text-[#667085]">{t("reports.spulerCount")}</p>
+                    <p className="text-2xl font-semibold text-brand">{lastEntry.spuler_count ?? 0}</p>
                   </div>
                 </div>
                 <div className="rounded-md border border-[#d0d5dd] bg-[#f8fafc] p-3">

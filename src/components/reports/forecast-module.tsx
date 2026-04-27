@@ -8,6 +8,7 @@ import { useHotelScope } from "@/src/contexts/hotel-scope-context";
 import { useI18n } from "@/src/i18n/provider";
 import { getSupabaseClient } from "@/src/lib/supabase";
 import { formatSupabaseError } from "@/src/lib/supabase-errors";
+import { getHotelCatalogIds, getHotelDisplayName } from "@/src/lib/hotel-catalog";
 import { getCurrentUser } from "@/src/lib/auth";
 
 type ForecastRow = {
@@ -33,15 +34,31 @@ function getWeekBaseRows(locale: "de" | "en" | "tr" | "uk") {
   });
 }
 
-export function ForecastModule() {
+type ForecastModuleProps = {
+  /** Admin panel: show data + hotel scope only; no edits or save. */
+  viewOnly?: boolean;
+};
+
+export function ForecastModule({ viewOnly = false }: ForecastModuleProps) {
   const { locale, t } = useI18n();
-  const { effectiveHotelId, isAdmin, hotelOptions, isLoading: hotelScopeLoading, setSelectedHotelId, selectedHotelId } =
-    useHotelScope();
+  const {
+    effectiveHotelId,
+    isAdmin,
+    hotelOptions,
+    isLoading: hotelScopeLoading,
+    setSelectedHotelId,
+    selectedHotelId,
+  } = useHotelScope();
+  /** Admin: aggregate all hotels in chart; single-hotel uses global scope + save. */
+  const [aggregateAllHotels, setAggregateAllHotels] = useState(false);
   const [rows, setRows] = useState<ForecastRow[]>(() => getWeekBaseRows(locale));
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const isAllHotelsSelected = isAdmin && aggregateAllHotels;
+  const selectedHotelForForecast = isAllHotelsSelected ? null : effectiveHotelId;
+  const tableReadOnly = viewOnly || isAllHotelsSelected;
 
   useEffect(() => {
     void Promise.resolve().then(() => {
@@ -56,9 +73,15 @@ export function ForecastModule() {
 
     const load = async () => {
       await Promise.resolve();
-      if (!effectiveHotelId) {
+      const availableHotels = Array.from(new Set([...getHotelCatalogIds(), ...hotelOptions]));
+      if (!selectedHotelForForecast && !isAllHotelsSelected) {
         setIsLoading(false);
         setErrorMessage(t("forecast.noHotel"));
+        return;
+      }
+      if (isAllHotelsSelected && availableHotels.length === 0) {
+        setIsLoading(false);
+        setErrorMessage(t("layout.noHotelsInDb"));
         return;
       }
       setIsLoading(true);
@@ -66,11 +89,13 @@ export function ForecastModule() {
       try {
         const supabase = getSupabaseClient();
         const dates = getWeekBaseRows(locale).map((row) => row.date);
-        const { data, error } = await supabase
+        const query = supabase
           .from("pms_forecasts")
-          .select("forecast_date, abreise_expected, bleibe_expected")
-          .eq("hotel_id", effectiveHotelId)
+          .select("hotel_id, forecast_date, abreise_expected, bleibe_expected")
           .in("forecast_date", dates);
+        const { data, error } = isAllHotelsSelected
+          ? await query.in("hotel_id", availableHotels)
+          : await query.eq("hotel_id", selectedHotelForForecast);
 
         if (error) {
           throw error;
@@ -79,13 +104,15 @@ export function ForecastModule() {
         if (data) {
           setRows((prev) =>
             prev.map((row) => {
-              const match = data.find(
+              const matches = data.filter(
                 (item) => String(item.forecast_date) === String(row.date).slice(0, 10),
               );
+              const abreise = matches.reduce((sum, item) => sum + (item.abreise_expected ?? 0), 0);
+              const bleibe = matches.reduce((sum, item) => sum + (item.bleibe_expected ?? 0), 0);
               return {
                 ...row,
-                abreise: match?.abreise_expected ?? row.abreise,
-                bleibe: match?.bleibe_expected ?? row.bleibe,
+                abreise,
+                bleibe,
                 // Belegung: `total_occupancy` sütunu yoksa sadece bu oturumda; kalici kayit icin `setup-production.sql` ile sütun ekleyin
                 occupancy: row.occupancy,
               };
@@ -100,7 +127,7 @@ export function ForecastModule() {
     };
 
     void load();
-  }, [effectiveHotelId, hotelScopeLoading, locale, t]);
+  }, [selectedHotelForForecast, hotelScopeLoading, locale, t, isAllHotelsSelected, hotelOptions]);
 
   const chartData = useMemo(
     () =>
@@ -119,7 +146,7 @@ export function ForecastModule() {
   };
 
   const saveForecast = async () => {
-    if (!effectiveHotelId) {
+    if (!selectedHotelForForecast) {
       setErrorMessage(t("forecast.noHotel"));
       return;
     }
@@ -135,7 +162,7 @@ export function ForecastModule() {
 
       const supabase = getSupabaseClient();
       const payload = rows.map((row) => ({
-        hotel_id: effectiveHotelId,
+        hotel_id: selectedHotelForForecast,
         forecast_date: row.date,
         abreise_expected: row.abreise,
         bleibe_expected: row.bleibe,
@@ -144,25 +171,24 @@ export function ForecastModule() {
       for (const rowPayload of payload) {
         const { data: existing, error: selectError } = await supabase
           .from("pms_forecasts")
-          .select("id")
+          .select("hotel_id, forecast_date")
           .eq("hotel_id", rowPayload.hotel_id)
           .eq("forecast_date", rowPayload.forecast_date)
-          .order("created_at", { ascending: false })
-          .limit(1)
           .maybeSingle();
 
         if (selectError) {
           throw selectError;
         }
 
-        if (existing?.id) {
+        if (existing) {
           const { error: updateError } = await supabase
             .from("pms_forecasts")
             .update({
               abreise_expected: rowPayload.abreise_expected,
               bleibe_expected: rowPayload.bleibe_expected,
             })
-            .eq("id", existing.id);
+            .eq("hotel_id", rowPayload.hotel_id)
+            .eq("forecast_date", rowPayload.forecast_date);
           if (updateError) {
             throw updateError;
           }
@@ -191,22 +217,27 @@ export function ForecastModule() {
           {t("forecast.subtitle")}
         </p>
         {isAdmin && !hotelScopeLoading && (
-          <div className="mt-3 max-w-sm">
+          <div className="mt-3 max-w-xl">
             <label className="mb-1 block text-sm font-medium text-[#344054]">{t("admin.selectHotel")}</label>
             <select
-              value={selectedHotelId}
-              onChange={(event) => setSelectedHotelId(event.target.value)}
+              value={aggregateAllHotels ? "all" : selectedHotelId}
+              onChange={(event) => {
+                const v = event.target.value;
+                if (v === "all") {
+                  setAggregateAllHotels(true);
+                  return;
+                }
+                setAggregateAllHotels(false);
+                setSelectedHotelId(v);
+              }}
               className="h-10 w-full rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
             >
-              {hotelOptions.length === 0 ? (
-                <option value="">{t("layout.noHotelsInDb")}</option>
-              ) : (
-                hotelOptions.map((hotelOption) => (
-                  <option key={hotelOption} value={hotelOption}>
-                    {hotelOption}
-                  </option>
-                ))
-              )}
+              <option value="all">{t("admin.allHotels")}</option>
+              {hotelOptions.map((hotelId) => (
+                <option key={hotelId} value={hotelId} title={hotelId}>
+                  {getHotelDisplayName(hotelId)}
+                </option>
+              ))}
             </select>
             <p className="mt-1 text-xs text-[#667085]">{t("layout.hotelScopeHint")}</p>
           </div>
@@ -230,56 +261,76 @@ export function ForecastModule() {
                   <tr key={row.date} className="odd:bg-white even:bg-[#f9fafb]">
                     <td className="border border-[#eaecf0] px-3 py-2 font-medium text-[#344054]">{row.label}</td>
                     <td className="border border-[#eaecf0] px-3 py-2">
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.abreise}
-                        onChange={(event) =>
-                          updateCell(index, "abreise", Number(event.target.value || 0))
-                        }
-                        className="h-9 w-24 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
-                      />
+                      {tableReadOnly ? (
+                        <span className="inline-block min-w-[4.5rem] px-1 text-sm font-semibold text-[#101828]">
+                          {row.abreise}
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.abreise}
+                          onChange={(event) =>
+                            updateCell(index, "abreise", Number(event.target.value || 0))
+                          }
+                          className="h-9 w-24 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
+                        />
+                      )}
                     </td>
                     <td className="border border-[#eaecf0] px-3 py-2">
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.bleibe}
-                        onChange={(event) =>
-                          updateCell(index, "bleibe", Number(event.target.value || 0))
-                        }
-                        className="h-9 w-24 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
-                      />
+                      {tableReadOnly ? (
+                        <span className="inline-block min-w-[4.5rem] px-1 text-sm font-semibold text-[#101828]">
+                          {row.bleibe}
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.bleibe}
+                          onChange={(event) =>
+                            updateCell(index, "bleibe", Number(event.target.value || 0))
+                          }
+                          className="h-9 w-24 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
+                        />
+                      )}
                     </td>
                     <td className="border border-[#eaecf0] px-3 py-2">
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.occupancy}
-                        onChange={(event) =>
-                          updateCell(index, "occupancy", Number(event.target.value || 0))
-                        }
-                        className="h-9 w-28 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
-                      />
+                      {tableReadOnly ? (
+                        <span className="inline-block min-w-[5rem] px-1 text-sm font-semibold text-[#101828]">
+                          {row.occupancy}
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.occupancy}
+                          onChange={(event) =>
+                            updateCell(index, "occupancy", Number(event.target.value || 0))
+                          }
+                          className="h-9 w-28 rounded-md border border-[#d0d5dd] px-2 outline-none ring-[#98a2b3] focus:ring-2"
+                        />
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <button
-            type="button"
-            onClick={() => void saveForecast()}
-            disabled={isSaving || isLoading}
-            className="mt-4 inline-flex h-10 items-center justify-center rounded-md bg-brand px-4 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-          >
-            {isSaving ? t("forecast.savingButton") : t("forecast.saveButton")}
-          </button>
+          {!viewOnly && (
+            <button
+              type="button"
+              onClick={() => void saveForecast()}
+              disabled={isSaving || isLoading || isAllHotelsSelected}
+              className="mt-4 inline-flex h-10 items-center justify-center rounded-md bg-brand px-4 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+            >
+              {isSaving ? t("forecast.savingButton") : t("forecast.saveButton")}
+            </button>
+          )}
         </section>
 
-        <section className="rounded-xl border border-[#d0d5dd] bg-white p-5">
+        <section className="min-w-0 rounded-xl border border-[#d0d5dd] bg-white p-5">
           <h2 className="text-base font-semibold text-[#101828]">{t("forecast.chartTitle")}</h2>
-          <div className="mt-3 h-[320px]">
+          <div className="mt-3 h-[320px] min-h-[320px] min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ left: 10, right: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#eaecf0" />

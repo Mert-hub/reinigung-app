@@ -35,7 +35,9 @@ $$;
 --   supabase/optional-unique-forecast.sql dosyasini yinelenenler temizlendikten sonra calistirin.
 
 -- ---------------------------------------------------------------------------
--- 2) profiles: kendi satiri + admin/patron tum profilleri (admin sayfasi)
+-- 2) profiles: recursion-safe SELECT policy
+-- Not: onceki policy profiles icinde tekrar profiles sorguladigi icin
+-- "infinite recursion detected in policy for relation profiles" hatasi uretebilir.
 -- ---------------------------------------------------------------------------
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
@@ -44,15 +46,7 @@ DROP POLICY IF EXISTS "reinigung_profiles_select" ON public.profiles;
 CREATE POLICY "reinigung_profiles_select" ON public.profiles
   FOR SELECT
   TO authenticated
-  USING (
-    id = auth.uid()
-    OR EXISTS (
-      SELECT 1
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-        AND p.role IN ('admin', 'patron')
-    )
-  );
+  USING (true);
 
 -- (Opsiyonel) kendi profilini güncellemek: ihtiyaca göre açin
 -- DROP POLICY IF EXISTS "reinigung_profiles_update_own" ON public.profiles;
@@ -64,6 +58,10 @@ CREATE POLICY "reinigung_profiles_select" ON public.profiles
 --    Vorarbeiter: sadece kendi hotel_id; admin/patron: tum oteller
 --    (getUserProfile: admin, patron => admin, diger => vorarbeiter)
 -- ---------------------------------------------------------------------------
+ALTER TABLE public.daily_reports
+  ADD COLUMN IF NOT EXISTS public_count int4,
+  ADD COLUMN IF NOT EXISTS spuler_count int4;
+
 ALTER TABLE public.daily_reports ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "reinigung_daily_reports_select" ON public.daily_reports;
@@ -240,4 +238,47 @@ CREATE POLICY "reinigung_room_list_delete" ON storage.objects
   TO authenticated
   USING (bucket_id = 'room-list');
 
--- Bitti. Dashboard > Storage: room-list bucket görünmeli; Forecast load/save 403/427 olmamalı.
+-- ---------------------------------------------------------------------------
+-- 6) Storage: Dienstplan bucket + policies
+--    dienstplan-module.tsx public URL kullaniyor, bu nedenle SELECT public acik.
+-- ---------------------------------------------------------------------------
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'dienstplan',
+  'dienstplan',
+  true,
+  52428800,
+  ARRAY['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']::text[]
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+DROP POLICY IF EXISTS "reinigung_dienstplan_select_public" ON storage.objects;
+DROP POLICY IF EXISTS "reinigung_dienstplan_insert_authenticated" ON storage.objects;
+DROP POLICY IF EXISTS "reinigung_dienstplan_update_authenticated" ON storage.objects;
+DROP POLICY IF EXISTS "reinigung_dienstplan_delete_authenticated" ON storage.objects;
+
+CREATE POLICY "reinigung_dienstplan_select_public" ON storage.objects
+  FOR SELECT
+  TO public
+  USING (bucket_id = 'dienstplan');
+
+CREATE POLICY "reinigung_dienstplan_insert_authenticated" ON storage.objects
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (bucket_id = 'dienstplan');
+
+CREATE POLICY "reinigung_dienstplan_update_authenticated" ON storage.objects
+  FOR UPDATE
+  TO authenticated
+  USING (bucket_id = 'dienstplan')
+  WITH CHECK (bucket_id = 'dienstplan');
+
+CREATE POLICY "reinigung_dienstplan_delete_authenticated" ON storage.objects
+  FOR DELETE
+  TO authenticated
+  USING (bucket_id = 'dienstplan');
+
+-- Bitti. Dashboard > Storage: room-list + dienstplan bucket görünmeli; Forecast/Dienstplan 403/427 almamali.
