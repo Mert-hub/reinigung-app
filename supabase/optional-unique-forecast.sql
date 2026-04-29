@@ -4,3 +4,8 @@
 
 CREATE UNIQUE INDEX IF NOT EXISTS pms_forecasts_hotel_id_forecast_date_key
   ON public.pms_forecasts (hotel_id, forecast_date);
+
+-- Realtime publish UPDATE hatasini (code 55000) kalici kapatmak icin:
+-- UNIQUE index olustuktan sonra replica identity'i bu index ile kullanin.
+ALTER TABLE public.pms_forecasts
+  REPLICA IDENTITY USING INDEX pms_forecasts_hotel_id_forecast_date_key;

@@ -33,6 +33,8 @@ $$;
 
 -- (hotel_id, forecast_date) tekilligi: ayni cifti iki kez ekleme riskine karsi istege bagli:
 --   supabase/optional-unique-forecast.sql dosyasini yinelenenler temizlendikten sonra calistirin.
+-- Realtime publish UPDATE kullaniminda 55000 hatasini onlemek icin replica identity gereklidir.
+ALTER TABLE public.pms_forecasts REPLICA IDENTITY FULL;
 
 -- ---------------------------------------------------------------------------
 -- 2) profiles: recursion-safe SELECT policy

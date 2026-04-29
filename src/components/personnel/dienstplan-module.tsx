@@ -40,6 +40,15 @@ function displayPlanName(fileName: string) {
   return withoutExt;
 }
 
+function extractPlanDate(fileName: string) {
+  const prefixed = fileName.match(/^(\d{4}-\d{2}-\d{2})__/);
+  if (prefixed?.[1]) {
+    return prefixed[1];
+  }
+  const legacy = fileName.match(/^(\d{4}-\d{2}-\d{2})-/);
+  return legacy?.[1] ?? "";
+}
+
 function isSupportedPlanFile(file: File) {
   const type = file.type.toLowerCase();
   if (type === "application/pdf" || type.startsWith("image/")) {
@@ -62,6 +71,7 @@ export function DienstplanModule() {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [viewerPlan, setViewerPlan] = useState<PlanFile | null>(null);
+  const [selectedPlanDate, setSelectedPlanDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const loadPlans = useCallback(async (targetHotelId: string) => {
     const supabase = getSupabaseClient();
@@ -148,7 +158,8 @@ export function DienstplanModule() {
       const supabase = getSupabaseClient();
       const ext = selectedFile.name.split(".").pop()?.toLowerCase() ?? "pdf";
       const safeLabel = sanitizeLabel(planLabel).replace(/\s+/g, "_") || "Plan";
-      const filePath = `${targetHotel}/${new Date().toISOString().slice(0, 10)}__${safeLabel}__${crypto.randomUUID()}.${ext}`;
+      const selectedDatePart = selectedPlanDate || new Date().toISOString().slice(0, 10);
+      const filePath = `${targetHotel}/${selectedDatePart}__${safeLabel}__${crypto.randomUUID()}.${ext}`;
 
       const { error } = await supabase.storage.from(DIENSTPLAN_BUCKET).upload(filePath, selectedFile, {
         upsert: false,
@@ -172,6 +183,13 @@ export function DienstplanModule() {
       setIsUploading(false);
     }
   };
+
+  const filteredPlans = plans.filter((plan) => {
+    if (!selectedPlanDate) {
+      return true;
+    }
+    return extractPlanDate(plan.name) === selectedPlanDate;
+  });
 
   return (
     <div className="space-y-4">
@@ -248,26 +266,64 @@ export function DienstplanModule() {
       </section>
 
       <section className="rounded-xl border border-[#d0d5dd] bg-white p-5">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-[#344054]">{t("admin.selectReportDate")}</label>
+            <input
+              type="date"
+              value={selectedPlanDate}
+              onChange={(event) => setSelectedPlanDate(event.target.value)}
+              className="h-10 rounded-md border border-[#d0d5dd] bg-white px-3 text-sm outline-none ring-[#98a2b3] focus:ring-2"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedPlanDate("")}
+            className="h-10 rounded-md border border-[#d0d5dd] bg-white px-3 text-sm font-medium text-[#344054] hover:bg-[#f9fafb]"
+          >
+            {t("dienstplan.allDates")}
+          </button>
+        </div>
         <h2 className="text-base font-semibold text-[#101828]">{t("dienstplan.uploadedPlans")}</h2>
         {isLoading ? (
           <p className="mt-2 text-sm text-[#667085]">{t("common.loading")}</p>
-        ) : plans.length === 0 ? (
+        ) : filteredPlans.length === 0 ? (
           <p className="mt-2 text-sm text-[#667085]">{t("dienstplan.noPlans")}</p>
         ) : (
           <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {plans.map((plan) => (
-              <button
+            {filteredPlans.map((plan) => (
+              <div
                 key={plan.id}
-                type="button"
-                onClick={() => setViewerPlan(plan)}
                 className="rounded-md border border-[#d0d5dd] bg-[#f9fafb] p-3 transition hover:border-[#98a2b3]"
               >
-                <div className="flex items-center gap-2 text-[#344054]">
+                <div className="overflow-hidden rounded-md border border-[#eaecf0] bg-white">
+                  {plan.mimeType.includes("pdf") || plan.url.toLowerCase().endsWith(".pdf") ? (
+                    <iframe
+                      src={`${plan.url}#toolbar=0&navpanes=0&scrollbar=0`}
+                      title={displayPlanName(plan.name)}
+                      className="h-28 w-full"
+                    />
+                  ) : (
+                    <img
+                      src={plan.url}
+                      alt={displayPlanName(plan.name)}
+                      className="h-28 w-full object-cover"
+                    />
+                  )}
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-[#344054]">
                   <FileText className="h-4 w-4" />
                   <p className="truncate text-sm font-medium">{displayPlanName(plan.name)}</p>
                 </div>
-                <p className="mt-2 text-xs text-[#667085]">{plan.created_at || t("common.noDate")}</p>
-              </button>
+                <p className="mt-1 text-xs text-[#667085]">{plan.created_at || t("common.noDate")}</p>
+                <button
+                  type="button"
+                  onClick={() => setViewerPlan(plan)}
+                  className="mt-2 inline-flex h-9 items-center justify-center rounded-md border border-[#d0d5dd] bg-white px-3 text-xs font-semibold text-[#344054] hover:bg-[#f2f4f7]"
+                >
+                  {t("admin.documentPreview")}
+                </button>
+              </div>
             ))}
           </div>
         )}

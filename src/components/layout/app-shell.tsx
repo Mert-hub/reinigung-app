@@ -21,7 +21,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { signOut, type AppRole } from "@/src/lib/auth";
+import { getCurrentUser, signOut, type AppRole } from "@/src/lib/auth";
 import { getHotelCatalogIds, getHotelDisplayName } from "@/src/lib/hotel-catalog";
 import { getSupabaseClient } from "@/src/lib/supabase";
 import { useHotelScope } from "@/src/contexts/hotel-scope-context";
@@ -51,6 +51,7 @@ const adminMenuSections: MenuSection[] = [
     titleKey: "layout.menu.operationSection",
     icon: Briefcase,
     items: [
+      { labelKey: "layout.menu.todayBoard", href: "/operations/today-board", icon: ClipboardCheck },
       { labelKey: "layout.menu.dailyReports", href: "/operations/daily-reports", icon: ClipboardCheck },
       { labelKey: "layout.menu.pmsForecast", href: "/operations/forecast", icon: BarChart3 },
       { labelKey: "layout.menu.taskManagement", href: "/operations/tasks", icon: Wrench },
@@ -64,7 +65,10 @@ const adminMenuSections: MenuSection[] = [
   {
     titleKey: "layout.menu.personnelSection",
     icon: Users,
-    items: [{ labelKey: "layout.menu.dienstplan", href: "/personnel/dienstplan", icon: CalendarDays }],
+    items: [
+      { labelKey: "layout.menu.dienstplan", href: "/personnel/dienstplan", icon: CalendarDays },
+      { labelKey: "layout.menu.personnelList", href: "/personnel/personnel-list", icon: Users },
+    ],
   },
   {
     titleKey: "layout.menu.settingsSection",
@@ -81,6 +85,7 @@ const vorarbeiterMenuSections: MenuSection[] = [
     titleKey: "layout.menu.operationSection",
     icon: Briefcase,
     items: [
+      { labelKey: "layout.menu.todayBoard", href: "/operations/today-board", icon: ClipboardCheck },
       { labelKey: "layout.menu.dailyReports", href: "/operations/daily-reports", icon: ClipboardCheck },
       { labelKey: "layout.menu.pmsForecast", href: "/operations/forecast", icon: BarChart3 },
       { labelKey: "layout.menu.taskManagement", href: "/operations/tasks", icon: Wrench },
@@ -89,7 +94,10 @@ const vorarbeiterMenuSections: MenuSection[] = [
   {
     titleKey: "layout.menu.personnelSection",
     icon: Users,
-    items: [{ labelKey: "layout.menu.dienstplan", href: "/personnel/dienstplan", icon: CalendarDays }],
+    items: [
+      { labelKey: "layout.menu.dienstplan", href: "/personnel/dienstplan", icon: CalendarDays },
+      { labelKey: "layout.menu.personnelList", href: "/personnel/personnel-list", icon: Users },
+    ],
   },
 ];
 
@@ -102,6 +110,27 @@ function formatBreadcrumb(pathname: string) {
     .join(" > ");
 }
 
+function pickProfileText(
+  profile: Record<string, unknown> | null,
+  keys: string[],
+): string {
+  if (!profile) return "";
+  for (const key of keys) {
+    const value = profile[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function getInitials(firstName: string, lastName: string) {
+  const first = firstName.trim().charAt(0);
+  const last = lastName.trim().charAt(0);
+  const combined = `${first}${last}`.toUpperCase();
+  return combined || "??";
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   const pathname = usePathname();
@@ -109,7 +138,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState<string[]>([]);
+  const [userInitials, setUserInitials] = useState("??");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   const { role, selectedHotelId, setSelectedHotelId, hotelOptions, isLoading: hotelScopeLoading } =
     useHotelScope();
   const currentRole: AppRole = role === "admin" ? "admin" : "vorarbeiter";
@@ -139,6 +171,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    const loadUserInitials = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (!user) return;
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle<Record<string, unknown>>();
+        if (error) return;
+        const firstName =
+          pickProfileText(data, ["first_name", "firstname", "given_name"]) ||
+          pickProfileText(data, ["full_name", "name"]).split(" ").filter(Boolean)[0] ||
+          "";
+        const lastName =
+          pickProfileText(data, ["last_name", "lastname", "surname", "family_name"]) ||
+          pickProfileText(data, ["full_name", "name"])
+            .split(" ")
+            .filter(Boolean)
+            .slice(1)
+            .join(" ");
+        setUserInitials(getInitials(firstName, lastName));
+      } catch {
+        // Keep default initials if profile read fails.
+      }
+    };
+    void loadUserInitials();
+  }, []);
+
+  useEffect(() => {
     if (!notificationsOpen) return;
     const close = (e: MouseEvent) => {
       if (notificationsRef.current && !notificationsRef.current.contains(e.target as Node)) {
@@ -148,6 +211,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [userMenuOpen]);
 
   useEffect(() => {
     const loadNotifications = async () => {
@@ -298,7 +372,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <p className="truncate text-sm font-semibold leading-tight text-[#0a0a0a]">{breadcrumb}</p>
                 </div>
               </div>
-              <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap sm:gap-2.5">
+              <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:gap-2.5">
                 <div className="hidden min-w-0 items-center gap-2 rounded-md border border-line bg-background px-2.5 py-1.5 md:flex md:max-w-[min(100%,18rem)] lg:max-w-xs">
                   <Search className="h-4 w-4 shrink-0 text-[#6b7280]" />
                   <input
@@ -355,13 +429,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   )}
                 </div>
                 <LanguageSwitcher />
-                <button
-                  type="button"
-                  onClick={() => void handleSignOut()}
-                  className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-xs font-medium text-[#0a0a0a] hover:bg-brand-muted/80"
-                >
-                  {t("common.signOut")}
-                </button>
+                <div ref={userMenuRef} className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setUserMenuOpen((open) => !open)}
+                    aria-expanded={userMenuOpen}
+                    aria-haspopup="true"
+                    aria-label="User menu"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-line bg-brand-muted text-xs font-semibold text-[#0a0a0a] hover:bg-brand-muted/70"
+                    title={userInitials}
+                  >
+                    {userInitials}
+                  </button>
+                  {userMenuOpen && (
+                    <div className="absolute right-0 z-50 mt-2 w-36 rounded-md border border-line bg-surface p-1.5 shadow-md">
+                      <button
+                        type="button"
+                        onClick={() => void handleSignOut()}
+                        className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-[#0a0a0a] hover:bg-brand-muted/80"
+                      >
+                        {t("common.signOut")}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </header>
